@@ -4,7 +4,7 @@ import psycopg2
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 import logging
-from telebot import types  # Импортируем types для кнопок
+from telebot import types
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,13 +15,12 @@ bot = telebot.TeleBot(API_TOKEN)
 
 user_states = {}
 
-# Подключение к базе данных
 try:
     conn = psycopg2.connect(
         dbname='keybot',
-        user='postgres',
+        user='Maksaticsa',
         password='adminadmin',
-        host='localhost',
+        host='Maksaticsa.postgres.pythonanywhere-services.com',
         port='5432'
     )
     cursor = conn.cursor()
@@ -50,19 +49,37 @@ def start_command(message):
 
 def show_menu(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    button_add = types.KeyboardButton("/добавить")
-    button_remove = types.KeyboardButton("/удалить")
-    button_check = types.KeyboardButton("/сертификаты")
+    button_add = types.KeyboardButton("/add")
+    button_remove = types.KeyboardButton("/remove")
+    button_check = types.KeyboardButton("/certificate")
     button_help = types.KeyboardButton("/help")
 
     markup.add(button_add, button_remove, button_check, button_help)
     bot.send_message(message.chat.id, "Выберите команду:", reply_markup=markup)
 
 
-@bot.message_handler(commands=['добавить'])
+@bot.message_handler(commands=['add'])
 def start_add_certificate(message):
     user_states[message.from_user.id] = {'step': 1}
-    bot.reply_to(message, "Введите название сертификата:")
+    bot.reply_to(message, "Введите название сертификата в кавычках:", reply_markup=cancel_keyboard())
+
+
+def cancel_keyboard():
+    markup = types.InlineKeyboardMarkup()
+    button_cancel = types.InlineKeyboardButton("Отмена", callback_data="cancel")
+    markup.add(button_cancel)
+    return markup
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel")
+def cancel_command(call):
+    user_id = call.from_user.id
+    if user_id in user_states:
+        del user_states[user_id]
+        bot.answer_callback_query(call.id, "✅ Процесс добавления сертификата отменён.")
+        bot.send_message(user_id, "Вы можете использовать другие команды.")
+    else:
+        bot.answer_callback_query(call.id, "🚫 У вас нет активного процесса добавления сертификата.")
 
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states)
@@ -71,14 +88,20 @@ def handle_add_certificate_input(message):
     step = user_states[user_id]['step']
 
     if step == 1:
-        user_states[user_id]['certificate_name'] = message.text
-        user_states[user_id]['step'] = 2
-        bot.reply_to(message, "Введите ключ сертификата:")
-    elif step == 2:  # Ввод ключа сертификата
-        user_states[user_id]['certificate_key'] = message.text
-        user_states[user_id]['step'] = 3
-        bot.reply_to(message, "Введите дату истечения в формате YYYY-MM-DD:")
-    elif step == 3:  # Ввод даты истечения
+        if message.text.startswith('"') and message.text.endswith('"'):
+            user_states[user_id]['certificate_name'] = message.text.strip('"')
+            user_states[user_id]['step'] = 2
+            bot.reply_to(message, "Введите ключ сертификата в кавычках:", reply_markup=cancel_keyboard())
+        else:
+            bot.reply_to(message, "❌ Пожалуйста, введите название сертификата в кавычках.", reply_markup=cancel_keyboard())
+    elif step == 2:
+        if message.text.startswith('"') and message.text.endswith('"'):
+            user_states[user_id]['certificate_key'] = message.text.strip('"')
+            user_states[user_id]['step'] = 3
+            bot.reply_to(message, "Введите дату истечения в формате YYYY-MM-DD:", reply_markup=cancel_keyboard())
+        else:
+            bot.reply_to(message, "❌ Пожалуйста, введите ключ сертификата в кавычках.", reply_markup=cancel_keyboard())
+    elif step == 3:
         try:
             expiration_date = datetime.strptime(message.text, '%Y-%m-%d').date()
             cursor.execute(
@@ -88,23 +111,27 @@ def handle_add_certificate_input(message):
             )
             conn.commit()
             bot.reply_to(message,
-                         f"Сертификат '{user_states[user_id]['certificate_name']}' с ключом '{user_states[user_id]['certificate_key']}' добавлен с датой истечения {message.text}.")
+                         f"✅ Сертификат *'{user_states[user_id]['certificate_name']}'* с ключом *'{user_states[user_id]['certificate_key']}'* добавлен с датой истечения {message.text}.")
             logging.info(
                 f"Сертификат '{user_states[user_id]['certificate_name']}' с ключом '{user_states[user_id]['certificate_key']}' добавлен для пользователя {message.from_user.full_name}.")
         except ValueError:
-            bot.reply_to(message, "Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.")
+            bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.", reply_markup=cancel_keyboard())
         finally:
             del user_states[user_id]
     else:
-        bot.reply_to(message, "Произошла ошибка. Попробуйте снова.")
+        bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте снова.")
 
 
-@bot.message_handler(commands=['удалить'])
+@bot.message_handler(commands=['remove'])
 def remove_certificate(message):
+    if message.from_user.id in user_states:
+        bot.reply_to(message, "❗ Вы всё еще находитесь в процессе добавления сертификата. Используйте кнопку отмены.", reply_markup=cancel_keyboard())
+        return
+
     logging.info(f"Команда удаления получена от пользователя {message.from_user.full_name}: {message.text}")
     try:
         if len(message.text.split()) < 2:
-            bot.reply_to(message, "Использование: /удалить <название сертификата>")
+            bot.reply_to(message, "Использование: /remove <название сертификата>", reply_markup=cancel_keyboard())
             return
 
         name = message.text.split(maxsplit=1)[1]
@@ -113,18 +140,22 @@ def remove_certificate(message):
         conn.commit()
 
         if cursor.rowcount > 0:
-            bot.reply_to(message, f"Сертификат '{name}' удален.")
+            bot.reply_to(message, f"✅ Сертификат *'{name}'* удален.", parse_mode='Markdown')
             logging.info(f"Сертификат '{name}' удален для пользователя {message.from_user.full_name}.")
         else:
-            bot.reply_to(message, f"Сертификат '{name}' не найден.")
+            bot.reply_to(message, f"🚫 Сертификат *'{name}'* не найден.", parse_mode='Markdown')
             logging.info(f"Сертификат '{name}' не найден для пользователя {message.from_user.full_name}.")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
+        bot.reply_to(message, f"⚠️ Ошибка: {e}", reply_markup=cancel_keyboard())
         logging.error(f"Ошибка при удалении сертификата: {e}")
 
 
-@bot.message_handler(commands=['сертификаты'])
+@bot.message_handler(commands=['certificate'])
 def check_certificates(message):
+    if message.from_user.id in user_states:
+        bot.reply_to(message, "❗ Вы всё еще находитесь в процессе добавления сертификата. Используйте кнопку отмены.", reply_markup=cancel_keyboard())
+        return
+
     logging.info(f"Команда проверки получена от пользователя {message.from_user.full_name}: {message.text}")
     try:
         cursor.execute("SELECT certificate_name, certificate_key, expiration_date FROM certificates WHERE user_id = %s",
@@ -132,27 +163,34 @@ def check_certificates(message):
         rows = cursor.fetchall()
 
         if rows:
-            response = "Ваши сертификаты:\n"
+            response = "*Ваши сертификаты:*\n"
             for name, certificate_key, expiration_date in rows:
                 expiration_date_str = expiration_date.strftime('%d-%m-%Y')
-                response += f"Сертификат '{name}', ключ: '{certificate_key}', дата истечения: {expiration_date_str}\n"
+                response += f"🔖 Сертификат: *\"{name}\"*\n" \
+                            f"🔑 Ключ: \"{certificate_key}\"\n" \
+                            f"📅 Дата истечения: {expiration_date_str}\n\n"
         else:
-            response = "У вас нет добавленных сертификатов."
+            response = "🚫 У вас нет добавленных сертификатов."
 
-        bot.reply_to(message, response)
+        bot.reply_to(message, response, parse_mode='Markdown')
         logging.info(f"Информация о сертификатах отправлена пользователю {message.from_user.full_name}.")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
+        bot.reply_to(message, f"⚠️ Ошибка: {e}")
         logging.error(f"Ошибка при проверке сертификатов: {e}")
 
 
-# Обработчик для команды /help
 @bot.message_handler(commands=['help'])
 def help_command(message):
+    if message.from_user.id in user_states:
+        bot.reply_to(message, "❗ Вы всё еще находитесь в процессе добавления сертификата. Используйте кнопку отмены.", reply_markup=cancel_keyboard())
+        return
+
     bot.reply_to(message, "Доступные команды:\n"
-                          "/добавить - Добавить сертификат\n"
-                          "/удалить - Удалить сертификат\n"
-                          "/сертификаты - Проверить сертификаты")
+                          "/add - Добавить сертификат\n"
+                          "/remove - Удалить сертификат\n"
+                          "/certificate - Проверить сертификаты\n"
+                          "/cancel - Отменить текущую операцию",
+                  parse_mode='Markdown')
 
 
 def send_reminders():
@@ -169,7 +207,8 @@ def send_reminders():
 
             if days_left == 7 or days_left == 3 or (days_left == 0 and hours_left <= 5):
                 bot.send_message(user_id,
-                                 f"{user_name}, сертификат '{name}' истекает {expiration_date}. Осталось {days_left} {'день' if days_left == 1 else 'дня' if days_left < 5 else 'дней'} и {int(hours_left % 24)} {'час' if hours_left % 24 == 1 else 'часа' if hours_left % 24 < 5 else 'часов'}. Пожалуйста, обновите его!")
+                                 f"{user_name}, сертификат *'{name}'* истекает {expiration_date}. Осталось {days_left} {'день' if days_left == 1 else 'дня' if days_left < 5 else 'дней'} и {int(hours_left % 24)} {'час' if hours_left % 24 == 1 else 'часа' if hours_left % 24 < 5 else 'часов'}. Пожалуйста, обновите его!",
+                                 parse_mode='Markdown')
                 logging.info(
                     f"Напоминание отправлено пользователю {user_name} о сертификате '{name}' за {days_left} {'день' if days_left == 1 else 'дня' if days_left < 5 else 'дней'} и {int(hours_left % 24)} {'час' if hours_left % 24 == 1 else 'часа' if hours_left % 24 < 5 else 'часов'}.")
 
