@@ -8,7 +8,6 @@ from telebot import types
 import signal
 import sys
 
-
 logging.basicConfig(level=logging.INFO)
 
 timezone = pytz.timezone('Asia/Bishkek')
@@ -16,9 +15,7 @@ timezone = pytz.timezone('Asia/Bishkek')
 API_TOKEN = '7370432818:AAELlwGFnwnq0J7flE1gZsDhyG3wnJRuaCY'
 bot = telebot.TeleBot(API_TOKEN)
 
-
 user_states = {}
-
 
 try:
     conn = psycopg2.connect(
@@ -60,6 +57,18 @@ def show_menu(message):
 
     markup.add(button_add, button_remove, button_check, button_update, button_help)
     bot.send_message(message.chat.id, "Выберите команду:", reply_markup=markup)
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = (
+        "Вот доступные команды:\n"
+        "/add - Добавить новый сертификат\n"
+        "/remove - Удалить сертификат\n"
+        "/certificate - Проверить сертификаты\n"
+        "/update - Обновить сертификат\n"
+        "/help - Показать это сообщение"
+    )
+    bot.reply_to(message, help_text)
 
 @bot.message_handler(commands=['add'])
 def start_add_certificate(message):
@@ -184,6 +193,7 @@ def start_update_certificate(message):
         return   
     user_states[user_id] = {'step': 1}
     bot.reply_to(message, "Введите название сертификата, который хотите обновить, в кавычках:", reply_markup=cancel_keyboard())
+
 @bot.message_handler(func=lambda message: message.from_user.id in user_states)
 def handle_update_certificate_input(message):
     user_id = message.from_user.id
