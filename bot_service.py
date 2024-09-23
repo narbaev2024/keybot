@@ -184,7 +184,6 @@ def check_certificates(message):
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка: {e}")
         logging.error(f"Ошибка при проверке сертификатов: {e}")
-
 @bot.message_handler(commands=['update'])
 def start_update_certificate(message):
     user_id = message.from_user.id
@@ -198,6 +197,7 @@ def start_update_certificate(message):
 def handle_update_certificate_input(message):
     user_id = message.from_user.id
     step = user_states[user_id]['step']
+    
     if step == 1:
         if message.text.startswith('"') and message.text.endswith('"'):
             certificate_name = message.text.strip('"')
@@ -210,7 +210,7 @@ def handle_update_certificate_input(message):
                 user_states[user_id]['certificate_key'] = row[0]
                 user_states[user_id]['expiration_date'] = row[1]
                 user_states[user_id]['step'] = 2
-                bot.reply_to(message, "Введите новый ключ сертификата в кавычках:", reply_markup=cancel_keyboard())
+                bot.reply_to(message, "Введите новый ключ сертификата в кавычках (или введите 'пропустить' для сохранения старого):", reply_markup=cancel_keyboard())
             else:
                 bot.reply_to(message, "🚫 Сертификат не найден. Пожалуйста, попробуйте еще раз.", reply_markup=cancel_keyboard())
                 del user_states[user_id]  
@@ -218,34 +218,36 @@ def handle_update_certificate_input(message):
             bot.reply_to(message, "❌ Пожалуйста, введите название сертификата в кавычках.", reply_markup=cancel_keyboard())
 
     elif step == 2:
-        if message.text.startswith('"') and message.text.endswith('"'):
-            new_certificate_key = message.text.strip('"')
-            user_states[user_id]['new_certificate_key'] = new_certificate_key
-            user_states[user_id]['step'] = 3
-            bot.reply_to(message, "Введите новую дату истечения в формате YYYY-MM-DD:", reply_markup=cancel_keyboard())
-        else:
-            bot.reply_to(message, "❌ Пожалуйста, введите ключ сертификата в кавычках.", reply_markup=cancel_keyboard())
+        new_certificate_key = message.text.strip('"')
+        if new_certificate_key.lower() == 'пропустить':
+            new_certificate_key = user_states[user_id]['certificate_key']  
+        user_states[user_id]['new_certificate_key'] = new_certificate_key
+        user_states[user_id]['step'] = 3
+        bot.reply_to(message, "Введите новую дату истечения в формате YYYY-MM-DD (или введите 'пропустить' для сохранения старой):", reply_markup=cancel_keyboard())
 
     elif step == 3:
-        try:
-            new_expiration_date = datetime.strptime(message.text, '%Y-%m-%d').date()
-            cursor.execute(
-                "UPDATE certificates SET certificate_key = %s, expiration_date = %s WHERE user_id = %s AND certificate_name = %s",
-                (user_states[user_id]['new_certificate_key'], new_expiration_date, user_id, user_states[user_id]['certificate_name'])
-            )
-            conn.commit()
+        new_expiration_date = message.text.strip('"')
+        if new_expiration_date.lower() == 'пропустить':
+            new_expiration_date = user_states[user_id]['expiration_date']
+        else:
+            try:
+                new_expiration_date = datetime.strptime(new_expiration_date, '%Y-%m-%d').date()
+            except ValueError:
+                bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.", reply_markup=cancel_keyboard())
+                return
 
-            bot.reply_to(message,
-                         f"✅ Сертификат *'{user_states[user_id]['certificate_name']}'* обновлён. Новый ключ: *'{user_states[user_id]['new_certificate_key']}'*, новая дата истечения: {message.text}.")
-            logging.info(
-                f"Сертификат '{user_states[user_id]['certificate_name']}' обновлён для пользователя {message.from_user.full_name}.")
-            del user_states[user_id] 
-        except ValueError:
-            bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.", reply_markup=cancel_keyboard())
-        except Exception as e:
-            bot.reply_to(message, f"⚠️ Ошибка: {e}")
-            logging.error(f"Ошибка при обновлении сертификата: {e}")
-            del user_states[user_id] 
+        cursor.execute(
+            "UPDATE certificates SET certificate_key = %s, expiration_date = %s WHERE user_id = %s AND certificate_name = %s",
+            (user_states[user_id]['new_certificate_key'], new_expiration_date, user_id, user_states[user_id]['certificate_name'])
+        )
+        conn.commit()
+
+        bot.reply_to(message,
+                     f"✅ Сертификат *'{user_states[user_id]['certificate_name']}'* обновлён. Новый ключ: *'{user_states[user_id]['new_certificate_key']}'*, новая дата истечения: {new_expiration_date}.")
+        logging.info(
+            f"Сертификат '{user_states[user_id]['certificate_name']}' обновлён для пользователя {message.from_user.full_name}.")
+        del user_states[user_id]  
+
     else:
         bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте снова.")
 
