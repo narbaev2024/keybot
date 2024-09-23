@@ -1,5 +1,5 @@
 import telebot
-from datetime import datetime, timedelta
+from datetime import datetime
 import psycopg2
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
@@ -57,18 +57,6 @@ def show_menu(message):
 
     markup.add(button_add, button_remove, button_check, button_update, button_help)
     bot.send_message(message.chat.id, "Выберите команду:", reply_markup=markup)
-
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    help_text = (
-        "Вот доступные команды:\n"
-        "/add - Добавить новый сертификат\n"
-        "/remove - Удалить сертификат\n"
-        "/certificate - Проверить сертификаты\n"
-        "/update - Обновить сертификат\n"
-        "/help - Показать это сообщение"
-    )
-    bot.reply_to(message, help_text)
 
 @bot.message_handler(commands=['add'])
 def start_add_certificate(message):
@@ -184,6 +172,7 @@ def check_certificates(message):
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка: {e}")
         logging.error(f"Ошибка при проверке сертификатов: {e}")
+
 @bot.message_handler(commands=['update'])
 def start_update_certificate(message):
     user_id = message.from_user.id
@@ -197,7 +186,6 @@ def start_update_certificate(message):
 def handle_update_certificate_input(message):
     user_id = message.from_user.id
     step = user_states[user_id]['step']
-    
     if step == 1:
         if message.text.startswith('"') and message.text.endswith('"'):
             certificate_name = message.text.strip('"')
@@ -210,70 +198,45 @@ def handle_update_certificate_input(message):
                 user_states[user_id]['certificate_key'] = row[0]
                 user_states[user_id]['expiration_date'] = row[1]
                 user_states[user_id]['step'] = 2
-                bot.reply_to(message, "Введите новый ключ сертификата в кавычках (или введите 'пропустить' для сохранения старого):", reply_markup=cancel_keyboard())
+                bot.reply_to(message, "Введите новый ключ сертификата в кавычках:", reply_markup=cancel_keyboard())
             else:
-                bot.reply_to(message, "🚫 Сертификат не найден. Пожалуйста, попробуйте еще раз.", reply_markup=cancel_keyboard())
-                del user_states[user_id]  
+                bot.reply_to(message, f"🚫 Сертификат *'{certificate_name}'* не найден.")
+                del user_states[user_id]
         else:
             bot.reply_to(message, "❌ Пожалуйста, введите название сертификата в кавычках.", reply_markup=cancel_keyboard())
-
+    
     elif step == 2:
-        new_certificate_key = message.text.strip('"')
-        if new_certificate_key.lower() == 'пропустить':
-            new_certificate_key = user_states[user_id]['certificate_key']  
-        user_states[user_id]['new_certificate_key'] = new_certificate_key
-        user_states[user_id]['step'] = 3
-        bot.reply_to(message, "Введите новую дату истечения в формате YYYY-MM-DD (или введите 'пропустить' для сохранения старой):", reply_markup=cancel_keyboard())
+        if message.text.startswith('"') and message.text.endswith('"'):
+            user_states[user_id]['new_certificate_key'] = message.text.strip('"')
+            user_states[user_id]['step'] = 3
+            bot.reply_to(message, "Введите новую дату истечения в формате YYYY-MM-DD:", reply_markup=cancel_keyboard())
+        else:
+            bot.reply_to(message, "❌ Пожалуйста, введите новый ключ сертификата в кавычках.", reply_markup=cancel_keyboard())
 
     elif step == 3:
-        new_expiration_date = message.text.strip('"')
-        if new_expiration_date.lower() == 'пропустить':
-            new_expiration_date = user_states[user_id]['expiration_date']
-        else:
-            try:
-                new_expiration_date = datetime.strptime(new_expiration_date, '%Y-%m-%d').date()
-            except ValueError:
-                bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.", reply_markup=cancel_keyboard())
-                return
+        try:
+            new_expiration_date = datetime.strptime(message.text, '%Y-%m-%d').date()
+            cursor.execute(
+                "UPDATE certificates SET certificate_key = %s, expiration_date = %s WHERE user_id = %s AND certificate_name = %s",
+                (user_states[user_id]['new_certificate_key'], new_expiration_date, user_id, user_states[user_id]['certificate_name'])
+            )
+            conn.commit()
 
-        cursor.execute(
-            "UPDATE certificates SET certificate_key = %s, expiration_date = %s WHERE user_id = %s AND certificate_name = %s",
-            (user_states[user_id]['new_certificate_key'], new_expiration_date, user_id, user_states[user_id]['certificate_name'])
-        )
-        conn.commit()
+            bot.reply_to(message,
+                         f"✅ Сертификат *'{user_states[user_id]['certificate_name']}'* обновлён. Новый ключ: *'{user_states[user_id]['new_certificate_key']}'*, новая дата истечения: {new_expiration_date}.")
+            logging.info(
+                f"Сертификат '{user_states[user_id]['certificate_name']}' обновлён для пользователя {message.from_user.full_name}.")
+        except ValueError:
+            bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.", reply_markup=cancel_keyboard())
+        finally:
+            del user_states[user_id]
 
-        bot.reply_to(message,
-                     f"✅ Сертификат *'{user_states[user_id]['certificate_name']}'* обновлён. Новый ключ: *'{user_states[user_id]['new_certificate_key']}'*, новая дата истечения: {new_expiration_date}.")
-        logging.info(
-            f"Сертификат '{user_states[user_id]['certificate_name']}' обновлён для пользователя {message.from_user.full_name}.")
-        del user_states[user_id]  
+if __name__ == "__main__":
+    def signal_handler(sig, frame):
+        logging.info("Остановка бота.")
+        cursor.close()
+        conn.close()
+        sys.exit(0)
 
-    else:
-        bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте снова.")
-
-def schedule_expiration_check():
-    cursor.execute("SELECT user_id, user_name, certificate_name, expiration_date FROM certificates")
-    rows = cursor.fetchall()
-
-    today = datetime.now(timezone).date()
-    for row in rows:
-        user_id, user_name, certificate_name, expiration_date = row
-
-        if expiration_date == today:
-            bot.send_message(user_id, f"📅 Ваш сертификат *'{certificate_name}'* истекает сегодня!", parse_mode='Markdown')
-
-scheduler = BackgroundScheduler()
-scheduler.add_job(schedule_expiration_check, 'cron', hour=8, minute=0, timezone=timezone)
-scheduler.start()
-
-def exit_gracefully(signum, frame):
-    logging.info("Завершение работы бота...")
-    cursor.close()
-    conn.close()
-    scheduler.shutdown()
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, exit_gracefully)
-
-if __name__ == '__main__':
-    bot.polling()
+    signal.signal(signal.SIGINT, signal_handler)
+    bot.polling(none_stop=True)
