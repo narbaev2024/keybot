@@ -18,9 +18,9 @@ user_states = {}
 try:
     conn = psycopg2.connect(
         dbname='keybot',
-        user='Maksaticsa',
+        user='postgres',
         password='adminadmin',
-        host='Maksaticsa.postgres.pythonanywhere-services.com',
+        host='localhost',
         port='5432'
     )
     cursor = conn.cursor()
@@ -121,7 +121,6 @@ def handle_add_certificate_input(message):
     else:
         bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте снова.")
 
-
 @bot.message_handler(commands=['remove'])
 def remove_certificate(message):
     if message.from_user.id in user_states:
@@ -129,25 +128,29 @@ def remove_certificate(message):
         return
 
     logging.info(f"Команда удаления получена от пользователя {message.from_user.full_name}: {message.text}")
+    
     try:
-        if len(message.text.split()) < 2:
-            bot.reply_to(message, "Использование: /remove <название сертификата>", reply_markup=cancel_keyboard())
+        if '"' in message.text:
+            name = message.text.split('"')[1]  
+        else:
+            bot.reply_to(message, "Использование: /remove \"Название сертификата\"", reply_markup=cancel_keyboard())
             return
 
-        name = message.text.split(maxsplit=1)[1]
-        cursor.execute("DELETE FROM certificates WHERE user_id = %s AND certificate_name = %s",
+        cursor.execute("DELETE FROM certificates WHERE user_id = %s AND certificate_name = %s", 
                        (message.from_user.id, name))
         conn.commit()
 
         if cursor.rowcount > 0:
-            bot.reply_to(message, f"✅ Сертификат *'{name}'* удален.", parse_mode='Markdown')
-            logging.info(f"Сертификат '{name}' удален для пользователя {message.from_user.full_name}.")
+            bot.reply_to(message, f"✅ Сертификат *'{name}'* удалён.", parse_mode='Markdown')
+            logging.info(f"Сертификат '{name}' удалён для пользователя {message.from_user.full_name}.")
         else:
             bot.reply_to(message, f"🚫 Сертификат *'{name}'* не найден.", parse_mode='Markdown')
             logging.info(f"Сертификат '{name}' не найден для пользователя {message.from_user.full_name}.")
+    
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка: {e}", reply_markup=cancel_keyboard())
         logging.error(f"Ошибка при удалении сертификата: {e}")
+
 
 
 @bot.message_handler(commands=['certificate'])
