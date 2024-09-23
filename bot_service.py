@@ -121,6 +121,7 @@ def handle_add_certificate_input(message):
     else:
         bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте снова.")
 
+
 @bot.message_handler(commands=['remove'])
 def remove_certificate(message):
     if message.from_user.id in user_states:
@@ -128,29 +129,25 @@ def remove_certificate(message):
         return
 
     logging.info(f"Команда удаления получена от пользователя {message.from_user.full_name}: {message.text}")
-    
     try:
-        if '"' in message.text:
-            name = message.text.split('"')[1]  
-        else:
-            bot.reply_to(message, "Использование: /remove \"Название сертификата\"", reply_markup=cancel_keyboard())
+        if len(message.text.split()) < 2:
+            bot.reply_to(message, "Использование: /remove <название сертификата>", reply_markup=cancel_keyboard())
             return
 
-        cursor.execute("DELETE FROM certificates WHERE user_id = %s AND certificate_name = %s", 
+        name = message.text.split(maxsplit=1)[1]
+        cursor.execute("DELETE FROM certificates WHERE user_id = %s AND certificate_name = %s",
                        (message.from_user.id, name))
         conn.commit()
 
         if cursor.rowcount > 0:
-            bot.reply_to(message, f"✅ Сертификат *'{name}'* удалён.", parse_mode='Markdown')
-            logging.info(f"Сертификат '{name}' удалён для пользователя {message.from_user.full_name}.")
+            bot.reply_to(message, f"✅ Сертификат *'{name}'* удален.", parse_mode='Markdown')
+            logging.info(f"Сертификат '{name}' удален для пользователя {message.from_user.full_name}.")
         else:
             bot.reply_to(message, f"🚫 Сертификат *'{name}'* не найден.", parse_mode='Markdown')
             logging.info(f"Сертификат '{name}' не найден для пользователя {message.from_user.full_name}.")
-    
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка: {e}", reply_markup=cancel_keyboard())
         logging.error(f"Ошибка при удалении сертификата: {e}")
-
 
 
 @bot.message_handler(commands=['certificate'])
@@ -202,29 +199,26 @@ def send_reminders():
         now = datetime.now(timezone)
         cursor.execute("SELECT user_id, user_name, certificate_name, expiration_date FROM certificates")
         rows = cursor.fetchall()
+
         for user_id, user_name, name, expiration_date in rows:
             expiration_date = expiration_date.date() if isinstance(expiration_date, datetime) else expiration_date
 
             days_left = (expiration_date - today).days
-            hours_left = (expiration_date - now).total_seconds() // 3600
 
-            if days_left == 7 or days_left == 3 or (days_left == 0 and hours_left <= 5):
-                bot.send_message(user_id,
-                                 f"{user_name}, сертификат *'{name}'* истекает {expiration_date}. Осталось {days_left} {'день' if days_left == 1 else 'дня' if days_left < 5 else 'дней'} и {int(hours_left % 24)} {'час' if hours_left % 24 == 1 else 'часа' if hours_left % 24 < 5 else 'часов'}. Пожалуйста, обновите его!",
-                                 parse_mode='Markdown')
-                logging.info(
-                    f"Напоминание отправлено пользователю {user_name} о сертификате '{name}' за {days_left} {'день' if days_left == 1 else 'дня' if days_left < 5 else 'дней'} и {int(hours_left % 24)} {'час' if hours_left % 24 == 1 else 'часа' if hours_left % 24 < 5 else 'часов'}.")
-
+            if days_left == 1:
+                bot.send_message(
+                    user_id,
+                    f"{user_name}, сертификат *'{name}'* истекает {expiration_date}. Остался 1 день. Пожалуйста, обновите его!",
+                    parse_mode='Markdown'
+                )
+                logging.info(f"Напоминание отправлено пользователю {user_name} о сертификате '{name}' за 1 день до истечения.")
+    
     except Exception as e:
         logging.error(f"Ошибка отправки напоминаний: {e}")
 
 
-scheduler = BackgroundScheduler(timezone=timezone)
-scheduler.add_job(send_reminders, 'interval', days=1)
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_reminders, 'interval', hours=24)
 scheduler.start()
 
-try:
-    logging.info("Бот запущен и ожидает команды...")
-    bot.polling(none_stop=True)
-except Exception as e:
-    logging.error(f"Ошибка при запуске бота: {e}") 
+bot.polling(none_stop=True)
