@@ -6,15 +6,16 @@ import pytz
 import logging
 from telebot import types
 
+# Настройки логирования
 logging.basicConfig(level=logging.INFO)
 
 timezone = pytz.timezone('Asia/Bishkek')
 
 API_TOKEN = '7370432818:AAELlwGFnwnq0J7flE1gZsDhyG3wnJRuaCY'
 bot = telebot.TeleBot(API_TOKEN)
-
 user_states = {}
 
+# Подключение к базе данных
 try:
     conn = psycopg2.connect(
         dbname='keybot',
@@ -32,7 +33,7 @@ try:
             user_name TEXT,
             certificate_name TEXT,
             certificate_key TEXT,
-            expiration_date DATE
+            expiration_date TIMESTAMP
         );
     ''')
     conn.commit()
@@ -41,11 +42,13 @@ except Exception as e:
     logging.error(f"Ошибка подключения к базе данных: {e}")
     exit()
 
+@bot.message_handler(func=lambda message: True)
+def get_chat_id(message):
+    bot.reply_to(message, f"Chat ID: {message.chat.id}")
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
     show_menu(message)
-
 
 def show_menu(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -57,19 +60,16 @@ def show_menu(message):
     markup.add(button_add, button_remove, button_check, button_help)
     bot.send_message(message.chat.id, "Выберите команду:", reply_markup=markup)
 
-
 @bot.message_handler(commands=['add'])
 def start_add_certificate(message):
     user_states[message.from_user.id] = {'step': 1}
     bot.reply_to(message, "Введите название сертификата в кавычках:", reply_markup=cancel_keyboard())
-
 
 def cancel_keyboard():
     markup = types.InlineKeyboardMarkup()
     button_cancel = types.InlineKeyboardButton("Отмена", callback_data="cancel")
     markup.add(button_cancel)
     return markup
-
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel")
 def cancel_command(call):
@@ -80,7 +80,6 @@ def cancel_command(call):
         bot.send_message(user_id, "Вы можете использовать другие команды.")
     else:
         bot.answer_callback_query(call.id, "🚫 У вас нет активного процесса добавления сертификата.")
-
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states)
 def handle_add_certificate_input(message):
@@ -98,29 +97,43 @@ def handle_add_certificate_input(message):
         if message.text.startswith('"') and message.text.endswith('"'):
             user_states[user_id]['certificate_key'] = message.text.strip('"')
             user_states[user_id]['step'] = 3
-            bot.reply_to(message, "Введите дату истечения в формате YYYY-MM-DD:", reply_markup=cancel_keyboard())
+            bot.reply_to(message, "Введите дату и время в формате  ГГГГ-MM-ДД ЧЧ:MM (например, 2024-09-24 11:00):", reply_markup=cancel_keyboard())
         else:
             bot.reply_to(message, "❌ Пожалуйста, введите ключ сертификата в кавычках.", reply_markup=cancel_keyboard())
     elif step == 3:
         try:
-            expiration_date = datetime.strptime(message.text, '%Y-%m-%d').date()
+            expiration_datetime = datetime.strptime(message.text, '%Y-%m-%d %H:%M')
             cursor.execute(
                 "INSERT INTO certificates (user_id, user_name, certificate_name, certificate_key, expiration_date) VALUES (%s, %s, %s, %s, %s)",
                 (user_id, message.from_user.full_name, user_states[user_id]['certificate_name'],
-                 user_states[user_id]['certificate_key'], expiration_date)
+                 user_states[user_id]['certificate_key'], expiration_datetime)
             )
             conn.commit()
+
+            # Запланировать напоминание
+            scheduler.add_job(send_reminder, 'date', run_date=expiration_datetime, args=[user_id, message.from_user.full_name, user_states[user_id]['certificate_name']])
+            
             bot.reply_to(message,
                          f"✅ Сертификат *'{user_states[user_id]['certificate_name']}'* с ключом *'{user_states[user_id]['certificate_key']}'* добавлен с датой истечения {message.text}.")
             logging.info(
                 f"Сертификат '{user_states[user_id]['certificate_name']}' с ключом '{user_states[user_id]['certificate_key']}' добавлен для пользователя {message.from_user.full_name}.")
         except ValueError:
-            bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат YYYY-MM-DD.", reply_markup=cancel_keyboard())
+            bot.reply_to(message, "❌ Неверный формат даты. Пожалуйста, используйте формат ГГГГ-MM-ДД ЧЧ:MM.", reply_markup=cancel_keyboard())
         finally:
             del user_states[user_id]
     else:
         bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте снова.")
 
+def send_reminder(user_id, user_name, certificate_name):
+    try:
+        bot.send_message(
+            user_id,
+            f"{user_name}, ваш сертификат *'{certificate_name}'* истекает сейчас! Пожалуйста, обновите его!",
+            parse_mode='Markdown'
+        )
+        logging.info(f"Напоминание отправлено пользователю {user_id} о сертификате '{certificate_name}'.")
+    except Exception as e:
+        logging.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
 
 @bot.message_handler(commands=['remove'])
 def remove_certificate(message):
@@ -149,7 +162,6 @@ def remove_certificate(message):
         bot.reply_to(message, f"⚠️ Ошибка: {e}", reply_markup=cancel_keyboard())
         logging.error(f"Ошибка при удалении сертификата: {e}")
 
-
 @bot.message_handler(commands=['certificate'])
 def check_certificates(message):
     if message.from_user.id in user_states:
@@ -165,7 +177,7 @@ def check_certificates(message):
         if rows:
             response = "*Ваши сертификаты:*\n"
             for name, certificate_key, expiration_date in rows:
-                expiration_date_str = expiration_date.strftime('%d-%m-%Y')
+                expiration_date_str = expiration_date.strftime('%d-%m-%Y %H:%M')
                 response += f"🔖 Сертификат: *\"{name}\"*\n" \
                             f"🔑 Ключ: \"{certificate_key}\"\n" \
                             f"📅 Дата истечения: {expiration_date_str}\n\n"
@@ -177,7 +189,6 @@ def check_certificates(message):
     except Exception as e:
         bot.reply_to(message, f"⚠️ Ошибка: {e}")
         logging.error(f"Ошибка при проверке сертификатов: {e}")
-
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
@@ -192,33 +203,13 @@ def help_command(message):
                           "/cancel - Отменить текущую операцию",
                   parse_mode='Markdown')
 
-
-def send_reminders():
-    try:
-        today = datetime.now(timezone).date()
-        now = datetime.now(timezone)
-        cursor.execute("SELECT user_id, user_name, certificate_name, expiration_date FROM certificates")
-        rows = cursor.fetchall()
-
-        for user_id, user_name, name, expiration_date in rows:
-            expiration_date = expiration_date.date() if isinstance(expiration_date, datetime) else expiration_date
-
-            days_left = (expiration_date - today).days
-
-            if days_left == 1:
-                bot.send_message(
-                    user_id,
-                    f"{user_name}, сертификат *'{name}'* истекает {expiration_date}. Остался 1 день. Пожалуйста, обновите его!",
-                    parse_mode='Markdown'
-                )
-                logging.info(f"Напоминание отправлено пользователю {user_name} о сертификате '{name}' за 1 день до истечения.")
-    
-    except Exception as e:
-        logging.error(f"Ошибка отправки напоминаний: {e}")
-
-
 scheduler = BackgroundScheduler()
-scheduler.add_job(send_reminders, 'interval', hours=24)
 scheduler.start()
 
-bot.polling(none_stop=True)
+try:
+    bot.polling(none_stop=True)
+except Exception as e:
+    logging.error(f"Ошибка в процессе бот-пуллинга: {e}")
+finally:
+    cursor.close()
+    conn.close()
