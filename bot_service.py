@@ -6,7 +6,7 @@ import pytz
 import logging
 from telebot import types
 
-# Настройки логирования
+
 logging.basicConfig(level=logging.INFO)
 
 timezone = pytz.timezone('Asia/Bishkek')
@@ -15,7 +15,6 @@ API_TOKEN = '7370432818:AAELlwGFnwnq0J7flE1gZsDhyG3wnJRuaCY'
 bot = telebot.TeleBot(API_TOKEN)
 user_states = {}
 
-# Подключение к базе данных
 try:
     conn = psycopg2.connect(
         dbname='keybot',
@@ -110,7 +109,6 @@ def handle_add_certificate_input(message):
             )
             conn.commit()
 
-            # Запланировать напоминание
             scheduler.add_job(send_reminder, 'date', run_date=expiration_datetime, args=[user_id, message.from_user.full_name, user_states[user_id]['certificate_name']])
             
             bot.reply_to(message,
